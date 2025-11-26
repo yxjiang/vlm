@@ -10,7 +10,7 @@ Usage:
     
     dataset = LLaVAPretrainDataset(
         data_path="./dataset/llava-pretrain/blip_laion_cc_sbu_558k.json",
-        image_folder="./dataset/llava-pretrain/images",
+        image_folder="./dataset/llava-pretrain",
         image_processor=clip_processor,
         tokenizer=tokenizer,
     )

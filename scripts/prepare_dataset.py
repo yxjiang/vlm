@@ -4,7 +4,14 @@ import zipfile
 import time
 import argparse
 from pathlib import Path
+import random
 from huggingface_hub import snapshot_download
+
+# Add src to path so we can import vlm
+project_root = Path(__file__).resolve().parent.parent
+sys.path.append(str(project_root / "src"))
+
+from vlm.data import LLaVAPretrainDataset
 
 def download_dataset(repo_id, local_dir, repo_type="dataset"):
     """Downloads the dataset using huggingface_hub."""
@@ -54,10 +61,56 @@ def unzip_with_progress(zip_path, extract_to):
     except Exception as e:
         print(f"❌ An error occurred during extraction: {e}")
 
+def verify_dataset(dataset_dir):
+    """Verifies that the dataset can be loaded correctly."""
+    print(f"🔍 Verifying dataset in {dataset_dir}...")
+    
+    data_path = dataset_dir / "blip_laion_cc_sbu_558k.json"
+    image_folder = dataset_dir
+    
+    if not data_path.exists():
+        print(f"❌ Error: Data file {data_path} not found.")
+        return False
+        
+    # Check if at least one image subdirectory exists (e.g. 00000)
+    # The images are stored in numbered subdirectories like 00000, 00001, etc.
+    if not (image_folder / "00000").exists():
+        print(f"❌ Error: Image subdirectories (e.g., {image_folder}/00000) not found.")
+        return False
+        
+    try:
+        dataset = LLaVAPretrainDataset(
+            data_path=str(data_path),
+            image_folder=str(image_folder)
+        )
+        
+        print(f"✅ Dataset loaded successfully. Size: {len(dataset)}")
+        
+        # Verify a few samples
+        indices = list(range(min(5, len(dataset))))
+        if len(dataset) > 10:
+            indices.extend(random.sample(range(5, len(dataset)), 5))
+            
+        print(f"Testing {len(indices)} samples...")
+        
+        for idx in indices:
+            sample = dataset[idx]
+            # Just access the data to make sure it loads
+            _ = sample['raw_image']
+            _ = sample['raw_text']
+            
+        print("✅ Verification complete: Random samples loaded successfully.")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Verification failed: {e}")
+        return False
+
 def main():
     parser = argparse.ArgumentParser(description="Download and prepare LLaVA-Pretrain dataset.")
     parser.add_argument("--skip-download", action="store_true", help="Skip the download step.")
     parser.add_argument("--skip-unzip", action="store_true", help="Skip the unzip step.")
+    parser.add_argument("--skip-verify", action="store_true", help="Skip the verification step.")
     args = parser.parse_args()
 
     repo_id = "liuhaotian/LLaVA-Pretrain"
@@ -73,10 +126,20 @@ def main():
             sys.exit(1)
 
     if not args.skip_unzip:
-        if zip_file.exists():
+        # Check if the dataset appears to be already extracted
+        extracted_data_path = dataset_dir / "blip_laion_cc_sbu_558k.json"
+        extracted_image_dir_check = dataset_dir / "00000" # Check for one of the image subdirectories
+
+        if extracted_data_path.exists() and extracted_image_dir_check.exists():
+            print(f"✅ Dataset already extracted to {dataset_dir}")
+        elif zip_file.exists():
+            print(f"Dataset not extracted. Extracting...")
             unzip_with_progress(str(zip_file), str(dataset_dir))
         else:
             print(f"⚠️  Zip file not found at {zip_file}. Skipping extraction.")
+
+    if not args.skip_verify:
+        verify_dataset(dataset_dir)
 
 if __name__ == "__main__":
     main()

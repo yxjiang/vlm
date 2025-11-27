@@ -63,7 +63,14 @@ class LLaVAModel(nn.Module):
     
     def encode_images(self, images: torch.Tensor) -> torch.Tensor:
         """Encode images to visual embeddings in LLM space."""
-        return self.connector(self.vision_encoder(images))
+        # Optimization: Use no_grad if vision encoder is frozen
+        if not next(self.vision_encoder.parameters()).requires_grad:
+            with torch.no_grad():
+                features = self.vision_encoder(images)
+        else:
+            features = self.vision_encoder(images)
+            
+        return self.connector(features)
     
     def forward(
         self,
@@ -91,6 +98,16 @@ class LLaVAModel(nn.Module):
                         device=attention_mask.device
                     )
                     attention_mask = torch.cat([visual_mask, attention_mask], dim=1)
+                
+                # Extend labels for visual tokens
+                if labels is not None:
+                    visual_labels = torch.full(
+                        visual_embeds.size()[:-1],
+                        -100,
+                        dtype=labels.dtype,
+                        device=labels.device
+                    )
+                    labels = torch.cat([visual_labels, labels], dim=1)
             else:
                 inputs_embeds = visual_embeds
         

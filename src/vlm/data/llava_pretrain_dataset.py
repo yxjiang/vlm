@@ -5,15 +5,6 @@ Dataset: liuhaotian/LLaVA-Pretrain (~558K samples)
 Setup:
   ./setup.sh  # Will prompt to download dataset
 
-Usage:
-    from vlm.data import LLaVAPretrainDataset, collate_fn
-    
-    dataset = LLaVAPretrainDataset(
-        data_path="./dataset/llava-pretrain/blip_laion_cc_sbu_558k.json",
-        image_folder="./dataset/llava-pretrain",
-        image_processor=clip_processor,
-        tokenizer=tokenizer,
-    )
 """
 import json
 import os
@@ -183,18 +174,18 @@ class LLaVAPretrainDataset(Dataset):
         
         # Process text if tokenizer is provided
         if self.tokenizer is not None:
-            # Tokenize input (question)
-            input_encoding = self.tokenizer(
+            # Tokenize input (question) to get length for masking
+            input_tokens = self.tokenizer(
                 input_text,
-                max_length=self.max_length,
-                padding='max_length',
                 truncation=True,
+                max_length=self.max_length,
                 return_tensors='pt'
             )
+            input_len = input_tokens['input_ids'].shape[1]
             
-            # Tokenize full text (question + answer) for labels
+            # Tokenize full text (question + answer)
             full_text = input_text + target_text
-            labels_encoding = self.tokenizer(
+            full_encoding = self.tokenizer(
                 full_text,
                 max_length=self.max_length,
                 padding='max_length',
@@ -202,13 +193,17 @@ class LLaVAPretrainDataset(Dataset):
                 return_tensors='pt'
             )
             
-            result['input_ids'] = input_encoding['input_ids'].squeeze(0)
-            result['attention_mask'] = input_encoding['attention_mask'].squeeze(0)
-            result['labels'] = labels_encoding['input_ids'].squeeze(0)
+            result['input_ids'] = full_encoding['input_ids'].squeeze(0)
+            result['attention_mask'] = full_encoding['attention_mask'].squeeze(0)
+            result['labels'] = full_encoding['input_ids'].squeeze(0).clone()
             
-            # Mask out the input part in labels (we only want to predict the answer)
-            input_len = input_encoding['input_ids'].shape[1]
-            result['labels'][:input_len] = -100
+            # Mask out the input part in labels
+            # Ensure we don't mask everything if input_len >= max_length
+            if input_len < self.max_length:
+                result['labels'][:input_len] = -100
+            else:
+                # If input is too long, mask everything (this sample will be ignored)
+                result['labels'][:] = -100
         else:
             result['raw_text'] = {
                 'input': input_text,
@@ -249,7 +244,7 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     return collated
 
 
-def build_dataloader(
+def build_pretrain_dataloader(
     config: DataConfig,
     tokenizer: Any,
     image_processor: CLIPImageProcessor,

@@ -63,7 +63,14 @@ class LLaVAModel(nn.Module):
     
     def encode_images(self, images: torch.Tensor) -> torch.Tensor:
         """Encode images to visual embeddings in LLM space."""
-        return self.connector(self.vision_encoder(images))
+        # Optimization: Use no_grad if vision encoder is frozen
+        if not next(self.vision_encoder.parameters()).requires_grad:
+            with torch.no_grad():
+                features = self.vision_encoder(images)
+        else:
+            features = self.vision_encoder(images)
+            
+        return self.connector(features)
     
     def forward(
         self,
@@ -73,29 +80,46 @@ class LLaVAModel(nn.Module):
         labels: Optional[torch.Tensor] = None,
     ):
         """Forward pass through LLaVA model."""
-        inputs_embeds = None
+        # Convert text token IDs to embeddings
+        text_embeds = None
+        if input_ids is not None:
+            text_embeds = self.language_model.get_input_embeddings()(input_ids)
         
+        # Process images if present
+        visual_embeds = None
         if images is not None:
             visual_embeds = self.encode_images(images)
-            
-            if input_ids is not None:
-                # Concat visual + text embeddings
-                text_embeds = self.language_model.get_input_embeddings()(input_ids)
-                inputs_embeds = torch.cat([visual_embeds, text_embeds], dim=1)
-                
-                # Extend attention mask for visual tokens
-                if attention_mask is not None:
-                    visual_mask = torch.ones(
-                        visual_embeds.size()[:-1],
-                        dtype=attention_mask.dtype,
-                        device=attention_mask.device
-                    )
-                    attention_mask = torch.cat([visual_mask, attention_mask], dim=1)
-            else:
-                inputs_embeds = visual_embeds
+            # Extend attention mask for visual tokens
+            if attention_mask is not None:
+                visual_mask = torch.ones(
+                    visual_embeds.size()[:-1],
+                    dtype=attention_mask.dtype,
+                    device=attention_mask.device
+                )
+                attention_mask = torch.cat(
+                    [visual_mask, attention_mask], dim=1
+                )
+            # Extend labels for visual tokens (masked with -100)
+            if labels is not None:
+                visual_labels = torch.full(
+                    visual_embeds.size()[:-1],
+                    -100,
+                    dtype=labels.dtype,
+                    device=labels.device
+                )
+                labels = torch.cat([visual_labels, labels], dim=1)
         
+        # Concatenate visual and text embeddings
+        if visual_embeds is not None and text_embeds is not None:
+            inputs_embeds = torch.cat([visual_embeds, text_embeds], dim=1)
+        elif visual_embeds is not None:
+            inputs_embeds = visual_embeds
+        elif text_embeds is not None:
+            inputs_embeds = text_embeds
+        
+        # Always use inputs_embeds, never pass input_ids to language model
         return self.language_model(
-            input_ids=input_ids if images is None else None,
+            input_ids=None,
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
             labels=labels,
